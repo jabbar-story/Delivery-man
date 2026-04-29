@@ -1,0 +1,480 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, addDoc, updateDoc, doc, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { 
+  Package, CheckCircle, Clock, MapPin, Phone, 
+  User, LogOut, Bell, Shield, Trash2, Plus, Store, 
+  Search, Settings, Info, Share2, Image as ImageIcon, MessageCircle
+} from 'lucide-react';
+
+// --- Custom Racing Bike (ريس) Icon ---
+const RacingBikeIcon = ({ size = 24, className = "" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <circle cx="5.5" cy="17.5" r="3.5"/>
+    <circle cx="18.5" cy="17.5" r="3.5"/>
+    <path d="M15 6a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm-3 11.5V14l-3-3 4-3 2 3h2"/>
+    <path d="M7.5 12.5 9 10l2 2"/>
+    <path d="M11 6.5h4l2 3.5h3"/>
+  </svg>
+);
+
+// --- Firebase Configuration ---
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = 'logilink-pro-system';
+
+// --- Notification Component ---
+const Toast = ({ message, type, onClose }) => {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  const styles = { success: 'bg-emerald-600', error: 'bg-rose-600', info: 'bg-indigo-600' };
+
+  return (
+    <div className={`fixed top-4 left-1/2 -translate-x-1/2 ${styles[type] || styles.info} text-white px-4 py-2 text-sm md:text-base rounded-2xl shadow-2xl flex items-center gap-2 z-[100] animate-in slide-in-from-top-4`}>
+      <Bell className="w-4 h-4 animate-ring" />
+      <span className="font-bold">{message}</span>
+    </div>
+  );
+};
+
+export default function App() {
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [appUser, setAppUser] = useState(null); 
+  const [users, setUsers] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [offers, setOffers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState(null);
+  
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [phoneInput, setPhoneInput] = useState('');
+  const [registerData, setRegisterData] = useState({ name: '', phone: '', whatsapp: '' });
+
+  const ADMIN_PHONE = '01223881051';
+
+  // --- Initial Auth & Listeners ---
+  useEffect(() => {
+    signInAnonymously(auth).catch(console.error);
+    return onAuthStateChanged(auth, u => { setFirebaseUser(u); setLoading(false); });
+  }, []);
+
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'users'), s => setUsers(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubOrders = onSnapshot(collection(db, 'artifacts', appId, 'public', 'orders'), s => setOrders(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.createdAt - a.createdAt)));
+    const unsubOffers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'offers'), s => setOffers(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.createdAt - a.createdAt)));
+    
+    return () => { unsubUsers(); unsubOrders(); unsubOffers(); };
+  }, [firebaseUser]);
+
+  const showToast = (msg, type = 'success') => setToast({ message: msg, type });
+
+  // --- Auth Logic ---
+  const handleLogin = (e) => {
+    e.preventDefault();
+    const found = users.find(u => u.phone === phoneInput);
+    if (phoneInput === ADMIN_PHONE) {
+      if (!found) {
+        const adminObj = { phone: ADMIN_PHONE, name: 'مدير النظام (الآدمن)', role: 'admin', createdAt: Date.now() };
+        addDoc(collection(db, 'artifacts', appId, 'public', 'users'), adminObj);
+        setAppUser(adminObj);
+      } else {
+        setAppUser(found);
+      }
+      showToast("مرحباً بك في لوحة الإدارة");
+    } else if (found) {
+      setAppUser(found);
+      showToast(`أهلاً ${found.name}`);
+    } else {
+      showToast("رقم الهاتف غير مسجل", "error");
+    }
+  };
+
+  const handleRegister = async (e) => {
+    e.preventDefault();
+    if (users.find(u => u.phone === registerData.phone)) {
+      showToast("هذا الرقم مسجل مسبقاً، يرجى تسجيل الدخول", "error");
+      return;
+    }
+    const newClient = { ...registerData, role: 'client', createdAt: Date.now() };
+    try {
+      const docRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'users'), newClient);
+      setAppUser({ id: docRef.id, ...newClient });
+      showToast("تم إنشاء الحساب بنجاح، مرحباً بك!");
+    } catch (err) {
+      showToast("حدث خطأ أثناء التسجيل", "error");
+    }
+  };
+
+  // --- Utility Functions ---
+  const shareLink = (title, text, customUrl) => {
+    const url = customUrl || window.location.href;
+    if (navigator.share) {
+      navigator.share({ title, text, url }).catch(console.error);
+    } else {
+      navigator.clipboard.writeText(url);
+      showToast("تم نسخ الرابط للحافظة");
+    }
+  };
+
+  const openWhatsApp = (phone, text) => {
+    const formattedPhone = phone.startsWith('0') ? '2' + phone : phone; // Adjust prefix based on country
+    window.open(`https://wa.me/${formattedPhone}?text=${encodeURIComponent(text)}`, '_blank');
+  };
+
+  // --- Panels ---
+  const AdminPanel = () => {
+    const [isAdding, setIsAdding] = useState(false);
+    const [formData, setFormData] = useState({ name: '', phone: '', role: 'merchant', logoUrl: '' });
+    const [searchQuery, setSearchQuery] = useState('');
+
+    const filteredUsers = users.filter(u => u.name.includes(searchQuery) || u.phone.includes(searchQuery));
+
+    const addUser = async () => {
+      if (!formData.name || !formData.phone) return showToast("البيانات غير مكتملة", "error");
+      if (formData.role === 'delivery' && formData.phone.length < 10) return showToast("يجب إدخال رقم هاتف صحيح للمندوب", "error");
+      
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'users'), { ...formData, createdAt: Date.now() });
+      showToast("تم إضافة المستخدم بنجاح");
+      setIsAdding(false);
+      setFormData({ name: '', phone: '', role: 'merchant', logoUrl: '' });
+    };
+
+    return (
+      <div className="space-y-4">
+        <div className="flex justify-between items-center bg-white p-3 rounded-2xl shadow-sm">
+          <h2 className="text-lg font-bold flex items-center gap-2"><Shield className="text-indigo-600" size={20} /> الإدارة</h2>
+          <button onClick={() => setIsAdding(!isAdding)} className="bg-indigo-600 text-white px-3 py-1.5 rounded-xl text-sm font-bold flex items-center gap-1">
+            <Plus size={16} /> إضافة
+          </button>
+        </div>
+
+        {isAdding && (
+          <div className="bg-white p-4 rounded-2xl border border-indigo-100 space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input placeholder="الاسم" className="p-2.5 bg-gray-50 rounded-xl text-sm outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+              <input placeholder="رقم الهاتف (مطلوب)" className="p-2.5 bg-gray-50 rounded-xl text-sm outline-none" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} />
+              <select className="p-2.5 bg-gray-50 rounded-xl text-sm outline-none" value={formData.role} onChange={e => setFormData({...formData, role: e.target.value})}>
+                <option value="merchant">متجر</option>
+                <option value="delivery">مندوب توصيل (ريس)</option>
+              </select>
+              {formData.role === 'merchant' && (
+                <input placeholder="رابط لوجو المتجر (اختياري)" className="p-2.5 bg-gray-50 rounded-xl text-sm outline-none" value={formData.logoUrl} onChange={e => setFormData({...formData, logoUrl: e.target.value})} />
+              )}
+            </div>
+            <button onClick={addUser} className="w-full bg-indigo-600 text-white py-2 rounded-xl text-sm font-bold">حفظ</button>
+          </div>
+        )}
+
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="p-3 bg-gray-50 flex items-center gap-2 border-b border-gray-100">
+             <Search className="text-gray-400" size={16} />
+             <input placeholder="بحث في المستخدمين..." className="bg-transparent outline-none w-full text-sm" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+          </div>
+          <div className="divide-y divide-gray-100">
+            {filteredUsers.map(u => (
+              <div key={u.id} className="p-3 flex justify-between items-center hover:bg-gray-50 transition-colors">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-xl ${u.role === 'merchant' ? 'bg-indigo-50 text-indigo-600' : u.role === 'delivery' ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-600'}`}>
+                    {u.role === 'merchant' ? (u.logoUrl ? <img src={u.logoUrl} alt="logo" className="w-5 h-5 object-cover rounded-full"/> : <Store size={18} />) : u.role === 'delivery' ? <RacingBikeIcon size={18} /> : <User size={18} />}
+                  </div>
+                  <div>
+                    <p className="font-bold text-sm text-gray-800">{u.name}</p>
+                    <p className="text-xs text-gray-500">{u.phone}</p>
+                  </div>
+                </div>
+                {u.phone !== ADMIN_PHONE && (
+                  <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'users', u.id))} className="text-rose-500 p-2"><Trash2 size={16} /></button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const MerchantPanel = () => {
+    const [view, setView] = useState('orders'); // orders, offers
+    const [newOrder, setNewOrder] = useState({ client: '', phone: '', whatsappNumber: '', address: '', price: '' });
+    const [newOffer, setNewOffer] = useState({ title: '', description: '', imageUrl: '', price: '' });
+    
+    const myOrders = orders.filter(o => o.merchantId === appUser.id);
+    const myOffers = offers.filter(o => o.merchantId === appUser.id);
+
+    const saveOrder = async (e) => {
+      e.preventDefault();
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'orders'), {
+        ...newOrder, merchantId: appUser.id, merchantName: appUser.name, status: 'قيد التجهيز', createdAt: Date.now()
+      });
+      setNewOrder({ client: '', phone: '', whatsappNumber: '', address: '', price: '' });
+      showToast("تم إنشاء الأوردر");
+    };
+
+    const saveOffer = async (e) => {
+      e.preventDefault();
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'offers'), {
+        ...newOffer, merchantId: appUser.id, merchantName: appUser.name, merchantWhatsApp: appUser.phone, createdAt: Date.now()
+      });
+      setNewOffer({ title: '', description: '', imageUrl: '', price: '' });
+      showToast("تم نشر العرض");
+      setView('offers');
+    };
+
+    return (
+      <div className="space-y-4">
+        {/* Navigation */}
+        <div className="flex gap-2 p-1 bg-gray-100 rounded-xl">
+          <button onClick={() => setView('orders')} className={`flex-1 py-2 text-sm font-bold rounded-lg ${view === 'orders' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500'}`}>الأوردرات</button>
+          <button onClick={() => setView('offers')} className={`flex-1 py-2 text-sm font-bold rounded-lg ${view === 'offers' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500'}`}>العروض الترويجية</button>
+        </div>
+
+        {view === 'orders' && (
+          <div className="space-y-4">
+            <form onSubmit={saveOrder} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 space-y-3">
+              <h3 className="font-bold text-sm text-gray-800 border-b pb-2">أوردر جديد</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <input required placeholder="اسم العميل" className="p-2.5 bg-gray-50 rounded-xl text-sm outline-none" value={newOrder.client} onChange={e => setNewOrder({...newOrder, client: e.target.value})} />
+                <input required placeholder="رقم الهاتف" className="p-2.5 bg-gray-50 rounded-xl text-sm outline-none" value={newOrder.phone} onChange={e => setNewOrder({...newOrder, phone: e.target.value})} />
+                <input required placeholder="رقم واتساب العميل (للتواصل)" className="p-2.5 bg-gray-50 rounded-xl text-sm outline-none" value={newOrder.whatsappNumber} onChange={e => setNewOrder({...newOrder, whatsappNumber: e.target.value})} />
+                <input required placeholder="العنوان بالتفصيل" className="p-2.5 bg-gray-50 rounded-xl text-sm outline-none" value={newOrder.address} onChange={e => setNewOrder({...newOrder, address: e.target.value})} />
+                <input required type="number" placeholder="المبلغ المطلوب تحصيله" className="p-2.5 bg-gray-50 rounded-xl text-sm outline-none md:col-span-2" value={newOrder.price} onChange={e => setNewOrder({...newOrder, price: e.target.value})} />
+              </div>
+              <button type="submit" className="w-full bg-indigo-600 text-white py-2.5 rounded-xl font-bold text-sm">حفظ وتجهيز الأوردر</button>
+            </form>
+
+            <div className="space-y-3">
+              {myOrders.map(o => (
+                <div key={o.id} className="bg-white p-4 rounded-2xl border border-gray-100 flex flex-col gap-3">
+                  <div className="flex justify-between items-center">
+                     <span className="font-bold text-gray-800 text-sm">{o.client}</span>
+                     <StatusBadge status={o.status} />
+                  </div>
+                  <div className="flex justify-between items-end">
+                     <div className="text-xs text-gray-500 space-y-1">
+                        <p className="flex items-center gap-1"><MapPin size={12} /> {o.address}</p>
+                        <p className="font-bold text-indigo-600">{o.price} ج.م</p>
+                     </div>
+                     {o.status === 'قيد التجهيز' && (
+                       <button onClick={async () => await updateDoc(doc(db, 'artifacts', appId, 'public', 'orders', o.id), {status: 'في انتظار التوصيل'})} className="bg-amber-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold">إرسال للمناديب</button>
+                     )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {view === 'offers' && (
+          <div className="space-y-4">
+             <form onSubmit={saveOffer} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 space-y-3">
+                <input required placeholder="عنوان العرض" className="w-full p-2.5 bg-gray-50 rounded-xl text-sm outline-none" value={newOffer.title} onChange={e => setNewOffer({...newOffer, title: e.target.value})} />
+                <textarea placeholder="وصف العرض" className="w-full p-2.5 bg-gray-50 rounded-xl text-sm outline-none h-20" value={newOffer.description} onChange={e => setNewOffer({...newOffer, description: e.target.value})}></textarea>
+                <div className="grid grid-cols-2 gap-3">
+                  <input placeholder="رابط صورة (اختياري)" className="w-full p-2.5 bg-gray-50 rounded-xl text-sm outline-none" value={newOffer.imageUrl} onChange={e => setNewOffer({...newOffer, imageUrl: e.target.value})} />
+                  <input required placeholder="السعر" className="w-full p-2.5 bg-gray-50 rounded-xl text-sm outline-none" value={newOffer.price} onChange={e => setNewOffer({...newOffer, price: e.target.value})} />
+                </div>
+                <button type="submit" className="w-full bg-emerald-600 text-white py-2.5 rounded-xl font-bold text-sm">نشر العرض للعملاء</button>
+             </form>
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {myOffers.map(offer => (
+                   <div key={offer.id} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+                      {offer.imageUrl && <img src={offer.imageUrl} alt="offer" className="w-full h-32 object-cover" />}
+                      <div className="p-3">
+                         <h4 className="font-bold text-sm">{offer.title}</h4>
+                         <p className="text-xs text-gray-500 mt-1 line-clamp-2">{offer.description}</p>
+                         <div className="flex justify-between items-center mt-3">
+                            <span className="text-emerald-600 font-bold text-sm">{offer.price} ج.م</span>
+                            <button onClick={() => shareLink(offer.title, offer.description, `${window.location.origin}/?offer=${offer.id}`)} className="text-gray-400 p-1 hover:text-indigo-600"><Share2 size={16}/></button>
+                         </div>
+                      </div>
+                   </div>
+                ))}
+             </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const DeliveryPanel = () => {
+    const available = orders.filter(o => o.status === 'في انتظار التوصيل');
+    const myCurrent = orders.filter(o => o.deliveryId === appUser.id && o.status === 'خرج للتوصيل');
+
+    const takeOrder = async (id) => {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'orders', id), {
+        status: 'خرج للتوصيل', deliveryId: appUser.id, deliveryName: appUser.name
+      });
+      showToast("تم استلام الأوردر، تواصل مع التاجر");
+    };
+
+    return (
+      <div className="space-y-6">
+        {myCurrent.length > 0 && (
+          <div className="space-y-3">
+             <h3 className="font-bold text-gray-800 text-sm flex items-center gap-2"><RacingBikeIcon className="text-emerald-500" size={18} /> مهامك الحالية</h3>
+             {myCurrent.map(o => (
+               <div key={o.id} className="bg-gradient-to-br from-emerald-600 to-emerald-800 text-white p-4 rounded-2xl shadow-lg flex flex-col gap-3">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-emerald-100 text-xs">توصيل إلى</p>
+                      <h4 className="text-lg font-bold">{o.client}</h4>
+                    </div>
+                    <div className="bg-white/20 px-3 py-1 rounded-lg text-center">
+                      <p className="text-xs opacity-90">التحصيل</p>
+                      <p className="font-bold">{o.price} ج.م</p>
+                    </div>
+                  </div>
+                  <p className="text-sm flex items-center gap-1"><MapPin size={14}/> {o.address}</p>
+                  <div className="flex gap-2 mt-2">
+                     <a href={`tel:${o.phone}`} className="flex-1 flex items-center justify-center gap-2 py-2 bg-white/20 rounded-xl text-sm font-bold"><Phone size={16}/> اتصال</a>
+                     <button onClick={() => openWhatsApp(o.whatsappNumber, `مرحباً ${o.client}، أنا مندوب التوصيل في طريقي إليك.`)} className="flex-1 flex items-center justify-center gap-2 py-2 bg-green-500 rounded-xl text-sm font-bold"><MessageCircle size={16}/> واتساب</button>
+                  </div>
+                  <button onClick={async () => await updateDoc(doc(db, 'artifacts', appId, 'public', 'orders', o.id), {status: 'تم التسليم'})} className="w-full py-2.5 mt-2 bg-white text-emerald-700 rounded-xl font-bold text-sm shadow-md">إنهاء وتم التسليم</button>
+               </div>
+             ))}
+          </div>
+        )}
+
+        <div className="space-y-3">
+           <h3 className="font-bold text-gray-800 text-sm border-b pb-2">طلبات متاحة ({available.length})</h3>
+           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {available.map(o => (
+                <div key={o.id} className="bg-white p-4 rounded-2xl border border-gray-100 flex justify-between items-center">
+                   <div className="space-y-1">
+                      <span className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-md font-bold">متجر: {o.merchantName}</span>
+                      <h4 className="font-bold text-gray-800 text-sm">{o.address}</h4>
+                      <p className="text-emerald-600 font-bold text-xs">{o.price} ج.م</p>
+                   </div>
+                   <button onClick={() => takeOrder(o.id)} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-md">
+                     استلام
+                   </button>
+                </div>
+              ))}
+           </div>
+        </div>
+      </div>
+    );
+  };
+
+  const ClientPanel = () => {
+    return (
+      <div className="space-y-4">
+        <h2 className="font-bold text-lg text-gray-800">أحدث العروض والمتاجر</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {offers.map(offer => (
+             <div key={offer.id} className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
+                {offer.imageUrl ? (
+                  <img src={offer.imageUrl} alt={offer.title} className="w-full h-40 object-cover" />
+                ) : (
+                  <div className="w-full h-24 bg-gray-50 flex items-center justify-center text-gray-300"><ImageIcon size={32} /></div>
+                )}
+                <div className="p-4 space-y-2">
+                   <div className="flex justify-between items-start">
+                      <h3 className="font-bold text-gray-800 text-base leading-tight">{offer.title}</h3>
+                      <span className="bg-emerald-50 text-emerald-600 text-xs font-bold px-2 py-1 rounded-md whitespace-nowrap">{offer.price} ج.م</span>
+                   </div>
+                   <p className="text-sm text-gray-500 line-clamp-2">{offer.description}</p>
+                   <p className="text-xs font-bold text-indigo-500 flex items-center gap-1"><Store size={12}/> {offer.merchantName}</p>
+                   <div className="flex gap-2 pt-2 border-t border-gray-50">
+                      <button onClick={() => openWhatsApp(offer.merchantWhatsApp, `مرحباً، أريد طلب هذا العرض: ${offer.title}`)} className="flex-1 bg-green-500 text-white py-2 rounded-xl text-sm font-bold flex items-center justify-center gap-2">
+                        <MessageCircle size={16} /> طلب واتساب
+                      </button>
+                      <button onClick={() => shareLink(`عرض من ${offer.merchantName}`, offer.title, `${window.location.origin}/?offer=${offer.id}`)} className="p-2 bg-gray-50 text-gray-600 rounded-xl hover:bg-gray-100">
+                        <Share2 size={16} />
+                      </button>
+                   </div>
+                </div>
+             </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // --- Auth Screen ---
+  if (!appUser) {
+    return (
+      <div dir="rtl" className="min-h-screen bg-gray-50 flex items-center justify-center p-4 font-sans">
+        <div className="w-full max-w-md bg-white rounded-3xl shadow-xl overflow-hidden border border-gray-100">
+           <div className="bg-indigo-600 p-8 text-center">
+              <Package className="w-12 h-12 text-white mx-auto mb-4" />
+              <h1 className="text-3xl font-black text-white">LogiLink</h1>
+              <p className="text-indigo-100 mt-1 text-sm">منصة الإدارة والخدمات اللوجستية</p>
+           </div>
+           
+           <div className="p-6 bg-white">
+              <div className="flex gap-2 mb-6 bg-gray-100 p-1 rounded-xl">
+                 <button onClick={() => setIsRegistering(false)} className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${!isRegistering ? 'bg-white shadow text-indigo-600' : 'text-gray-500'}`}>تسجيل الدخول</button>
+                 <button onClick={() => setIsRegistering(true)} className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${isRegistering ? 'bg-white shadow text-indigo-600' : 'text-gray-500'}`}>عميل جديد</button>
+              </div>
+
+              {!isRegistering ? (
+                <form onSubmit={handleLogin} className="space-y-4">
+                   <div className="space-y-1">
+                      <label className="text-xs font-bold text-gray-600 px-1">رقم الهاتف</label>
+                      <input className="w-full p-3.5 bg-gray-50 rounded-xl outline-none focus:ring-2 ring-indigo-100 text-base font-bold tabular-nums text-center" placeholder="01xxxxxxxxx" value={phoneInput} onChange={e => setPhoneInput(e.target.value)} />
+                   </div>
+                   <button className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-bold text-base shadow-md">دخول</button>
+                </form>
+              ) : (
+                <form onSubmit={handleRegister} className="space-y-4">
+                   <input required placeholder="الاسم بالكامل" className="w-full p-3.5 bg-gray-50 rounded-xl text-sm outline-none" value={registerData.name} onChange={e => setRegisterData({...registerData, name: e.target.value})} />
+                   <input required placeholder="رقم الهاتف الأساسي" className="w-full p-3.5 bg-gray-50 rounded-xl text-sm outline-none" value={registerData.phone} onChange={e => setRegisterData({...registerData, phone: e.target.value})} />
+                   <input required placeholder="رقم الواتساب للتواصل" className="w-full p-3.5 bg-gray-50 rounded-xl text-sm outline-none" value={registerData.whatsapp} onChange={e => setRegisterData({...registerData, whatsapp: e.target.value})} />
+                   <button className="w-full bg-emerald-600 text-white py-3.5 rounded-xl font-bold text-base shadow-md">تأكيد الحساب والدخول</button>
+                </form>
+              )}
+           </div>
+        </div>
+        {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      </div>
+    );
+  }
+
+  return (
+    <div dir="rtl" className="min-h-screen bg-gray-50 font-sans pb-6">
+      <nav className="bg-white border-b border-gray-100 sticky top-0 z-40 p-3 shadow-sm">
+        <div className="max-w-4xl mx-auto flex justify-between items-center">
+           <div className="flex items-center gap-2">
+              <div className="bg-indigo-600 p-1.5 rounded-lg"><Package className="text-white" size={20} /></div>
+              <span className="font-bold text-gray-800 tracking-tight">LogiLink</span>
+           </div>
+           <div className="flex items-center gap-3">
+              <div className="text-left hidden sm:block">
+                <p className="text-[10px] font-bold text-gray-400">{appUser.role === 'admin' ? 'مدير' : appUser.role === 'merchant' ? 'متجر' : appUser.role === 'delivery' ? 'كابتن ريس' : 'عميل'}</p>
+                <p className="text-sm font-bold text-gray-800">{appUser.name}</p>
+              </div>
+              <button onClick={() => setAppUser(null)} className="p-2 bg-rose-50 text-rose-500 rounded-lg"><LogOut size={16} /></button>
+           </div>
+        </div>
+      </nav>
+
+      <main className="max-w-4xl mx-auto p-4 md:p-6">
+        {appUser.role === 'admin' && <AdminPanel />}
+        {appUser.role === 'merchant' && <MerchantPanel />}
+        {appUser.role === 'delivery' && <DeliveryPanel />}
+        {appUser.role === 'client' && <ClientPanel />}
+      </main>
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+// --- Helper Components ---
+const StatusBadge = ({ status }) => {
+  const styles = {
+    'قيد التجهيز': 'bg-gray-100 text-gray-600',
+    'في انتظار التوصيل': 'bg-amber-50 text-amber-600',
+    'خرج للتوصيل': 'bg-indigo-50 text-indigo-600',
+    'تم التسليم': 'bg-emerald-50 text-emerald-600'
+  };
+  return <span className={`px-2 py-1 rounded-md text-[10px] font-bold ${styles[status]}`}>{status}</span>;
+};
